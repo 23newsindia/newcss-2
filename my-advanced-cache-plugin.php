@@ -16,14 +16,19 @@ if (file_exists(MACP_PLUGIN_DIR . 'vendor/autoload.php')) {
     require_once MACP_PLUGIN_DIR . 'vendor/autoload.php';
 }
 
+// Load core files
 require_once MACP_PLUGIN_DIR . 'includes/class-macp-debug.php';
 require_once MACP_PLUGIN_DIR . 'includes/class-macp-filesystem.php';
 require_once MACP_PLUGIN_DIR . 'includes/class-macp-redis.php';
 require_once MACP_PLUGIN_DIR . 'includes/class-macp-minification.php';
 require_once MACP_PLUGIN_DIR . 'includes/class-macp-html-cache.php';
+require_once MACP_PLUGIN_DIR . 'includes/class-macp-js-optimizer.php';
+
+// Load admin files
+require_once MACP_PLUGIN_DIR . 'includes/admin/class-macp-admin-assets.php';
+require_once MACP_PLUGIN_DIR . 'includes/admin/class-macp-admin-settings.php';
 require_once MACP_PLUGIN_DIR . 'includes/class-macp-admin.php';
 require_once MACP_PLUGIN_DIR . 'includes/class-macp-debug-utility.php';
-require_once MACP_PLUGIN_DIR . 'includes/class-macp-js-optimizer.php';
 
 class MACP_Plugin {
     private static $instance = null;
@@ -50,12 +55,30 @@ class MACP_Plugin {
 
         $this->redis = new MACP_Redis();
         $this->html_cache = new MACP_HTML_Cache();
-        $this->admin = new MACP_Admin($this->redis);
         $this->js_optimizer = new MACP_JS_Optimizer();
+        $this->admin = new MACP_Admin($this->redis);
 
         $this->init_hooks();
         
         MACP_Debug::log('Plugin initialized');
+    }
+
+    private function init_hooks() {
+        if (get_option('macp_enable_html_cache', 1)) {
+            add_action('template_redirect', [$this->html_cache, 'start_buffer'], -9999);
+            add_action('save_post', [$this->html_cache, 'clear_cache']);
+            add_action('comment_post', [$this->html_cache, 'clear_cache']);
+            add_action('wp_trash_post', [$this->html_cache, 'clear_cache']);
+            add_action('switch_theme', [$this->html_cache, 'clear_cache']);
+        }
+
+        if (get_option('macp_enable_redis', 1)) {
+            add_action('init', [$this->redis, 'prime_cache']);
+        }
+
+        // Add hook for settings update
+        add_action('update_option_macp_enable_js_defer', [$this->js_optimizer, 'initialize_settings']);
+        add_action('update_option_macp_enable_js_delay', [$this->js_optimizer, 'initialize_settings']);
     }
 
     public function activate() {
@@ -72,8 +95,8 @@ class MACP_Plugin {
         add_option('macp_enable_gzip', 1);
         add_option('macp_enable_redis', 1);
         add_option('macp_minify_html', 0);
-        add_option('macp_enable_js_defer', 1);
-        add_option('macp_enable_js_delay', 1);
+        add_option('macp_enable_js_defer', 0);
+        add_option('macp_enable_js_delay', 0);
         add_option('macp_excluded_scripts', []);
         add_option('macp_deferred_scripts', ['jquery-core', 'jquery-migrate']);
     }
@@ -83,20 +106,6 @@ class MACP_Plugin {
             $this->html_cache->clear_cache();
         }
         MACP_Debug::log('Plugin deactivated');
-    }
-
-    private function init_hooks() {
-        if (get_option('macp_enable_html_cache', 1)) {
-            add_action('template_redirect', [$this->html_cache, 'start_buffer'], -9999);
-            add_action('save_post', [$this->html_cache, 'clear_cache']);
-            add_action('comment_post', [$this->html_cache, 'clear_cache']);
-            add_action('wp_trash_post', [$this->html_cache, 'clear_cache']);
-            add_action('switch_theme', [$this->html_cache, 'clear_cache']);
-        }
-
-        if (get_option('macp_enable_redis', 1)) {
-            add_action('init', [$this->redis, 'prime_cache']);
-        }
     }
 }
 

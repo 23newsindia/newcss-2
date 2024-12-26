@@ -2,7 +2,6 @@
 class MACP_JS_Optimizer {
     private $excluded_scripts = [];
     private $deferred_scripts = [];
-    private $delayed_scripts = [];
     private $admin_paths = [
         'wp-admin',
         'wp-login.php',
@@ -10,15 +9,29 @@ class MACP_JS_Optimizer {
     ];
 
     public function __construct() {
-        $this->excluded_scripts = get_option('macp_excluded_scripts', []);
-        $this->deferred_scripts = get_option('macp_deferred_scripts', [
+        add_action('init', [$this, 'initialize_settings'], 5);
+    }
+
+    public function initialize_settings() {
+        // Initialize settings
+        $this->excluded_scripts = array_filter(array_map('trim', (array)get_option('macp_excluded_scripts', [])));
+        $this->deferred_scripts = array_filter(array_map('trim', (array)get_option('macp_deferred_scripts', [
             'jquery-core',
             'jquery-migrate'
-        ]);
+        ])));
         
-        add_filter('script_loader_tag', [$this, 'process_script_tag'], 10, 3);
-        add_action('wp_footer', [$this, 'add_delay_script'], 99);
+        // Add filters only if optimization is enabled
+        if (get_option('macp_enable_js_defer', 0)) {
+            add_filter('script_loader_tag', [$this, 'process_script_tag'], 10, 3);
+        }
+
+        // Add delay script only if delay is enabled
+        if (get_option('macp_enable_js_delay', 0)) {
+            add_filter('script_loader_tag', [$this, 'process_script_tag'], 10, 3);
+            add_action('wp_footer', [$this, 'add_delay_script'], 99999);
+        }
     }
+
 
     public function process_script_tag($tag, $handle, $src) {
         // Skip processing for admin pages
@@ -26,27 +39,28 @@ class MACP_JS_Optimizer {
             return $tag;
         }
 
-        // Skip excluded pages
-        if ($this->is_excluded_page()) {
-            return $tag;
-        }
-
-        // Check if script should be excluded
+        // Skip excluded scripts
         if ($this->is_script_excluded($src)) {
             return $tag;
         }
 
-        // Apply defer if enabled
+        // Apply defer if enabled and script is in deferred list
         if (get_option('macp_enable_js_defer', 0) && in_array($handle, $this->deferred_scripts)) {
-            return str_replace(' src', ' defer src', $tag);
+            if (strpos($tag, 'defer') === false) {
+                $tag = str_replace(' src=', ' defer src=', $tag);
+            }
+            return $tag;
         }
 
-        // Apply delay if enabled
-        if (get_option('macp_enable_js_delay', 0)) {
-            if (strpos($tag, 'type="text/javascript"')) {
+        // Apply delay if enabled and script is not deferred
+        if (get_option('macp_enable_js_delay', 0) && !in_array($handle, $this->deferred_scripts)) {
+            if (strpos($tag, 'type="text/javascript"') !== false) {
                 $tag = str_replace('type="text/javascript"', 'type="rocketlazyloadscript"', $tag);
-                $tag = str_replace(' src=', ' data-rocket-src=', $tag);
+            } else {
+                $tag = str_replace('<script', '<script type="rocketlazyloadscript"', $tag);
             }
+            $tag = str_replace(' src=', ' data-rocket-src=', $tag);
+            return $tag;
         }
 
         return $tag;
@@ -61,24 +75,9 @@ class MACP_JS_Optimizer {
         return false;
     }
 
-    private function is_excluded_page() {
-        $excluded_pages = [
-            'checkout',
-            'cart',
-            'my-account'
-        ];
-
-        foreach ($excluded_pages as $page) {
-            if (is_page($page)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private function is_script_excluded($src) {
         foreach ($this->excluded_scripts as $excluded_script) {
-            if (strpos($src, $excluded_script) !== false) {
+            if (!empty($excluded_script) && strpos($src, $excluded_script) !== false) {
                 return true;
             }
         }
@@ -86,54 +85,44 @@ class MACP_JS_Optimizer {
     }
 
     public function add_delay_script() {
-        if (!get_option('macp_enable_js_delay', 0)) {
-            return;
-        }
         ?>
-        <script>
-            class RocketLazyLoadScripts {
-                constructor() {
-                    this.triggerEvents = ["keydown", "mousedown", "mousemove", "touchmove", "touchstart", "touchend", "wheel"];
-                    this.userEventHandler = this._triggerListener.bind(this);
-                    this.touchStartHandler = this._onTouchStart.bind(this);
-                    this._addEventListener(this);
-                }
+<script type="text/javascript">
+class RocketLazyLoadScripts {
+    constructor() {
+        this.triggerEvents = ["keydown", "mousedown", "mousemove", "touchmove", "touchstart", "touchend", "wheel"];
+        this.userEventHandler = this._triggerListener.bind(this);
+        this._addEventListener(this);
+    }
 
-                _addEventListener(t) {
-                    this.triggerEvents.forEach(e => window.addEventListener(e, t.userEventHandler, {passive: !0}));
-                }
+    _addEventListener(t) {
+        this.triggerEvents.forEach(e => window.addEventListener(e, t.userEventHandler, {passive: !0}));
+    }
 
-                _triggerListener() {
-                    this._removeEventListener(this);
-                    this._loadEverythingNow();
-                }
+    _triggerListener() {
+        this._removeEventListener(this);
+        this._loadEverythingNow();
+    }
 
-                _removeEventListener(t) {
-                    this.triggerEvents.forEach(e => window.removeEventListener(e, t.userEventHandler, {passive: !0}));
-                }
+    _removeEventListener(t) {
+        this.triggerEvents.forEach(e => window.removeEventListener(e, t.userEventHandler, {passive: !0}));
+    }
 
-                _loadEverythingNow() {
-                    document.querySelectorAll("script[type=rocketlazyloadscript]").forEach(t => {
-                        t.setAttribute("type", "text/javascript");
-                        let src = t.getAttribute("data-rocket-src");
-                        if (src) {
-                            t.removeAttribute("data-rocket-src");
-                            t.setAttribute("src", src);
-                        }
-                    });
-                }
-
-                _onTouchStart(t) {
-                    "HTML" !== t.target.tagName && (window.addEventListener("touchend", this.touchEndHandler), 
-                    window.addEventListener("mouseup", this.touchEndHandler), 
-                    window.addEventListener("touchmove", this.touchMoveHandler, {passive: !0}),
-                    window.addEventListener("mousemove", this.touchMoveHandler), 
-                    t.target.addEventListener("click", this.clickHandler), 
-                    this._pendingClickStarted())
-                }
+    _loadEverythingNow() {
+        document.querySelectorAll("script[type=rocketlazyloadscript]").forEach(t => {
+            t.setAttribute("type", "text/javascript");
+            let src = t.getAttribute("data-rocket-src");
+            if (src) {
+                t.removeAttribute("data-rocket-src");
+                t.setAttribute("src", src);
             }
-            RocketLazyLoadScripts.run();
-        </script>
+        });
+    }
+}
+
+window.addEventListener('DOMContentLoaded', function() {
+    new RocketLazyLoadScripts();
+});
+</script>
         <?php
     }
 }
